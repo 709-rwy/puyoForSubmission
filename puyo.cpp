@@ -11,6 +11,7 @@
 #include <utility>
 #include <vector>
 
+// 操作中の画面更新間隔（マイクロ秒）。
 #define GMCLOCK 50000
 
 enum puyocolor {
@@ -32,6 +33,7 @@ const std::vector<std::vector<short>> colorSets = {
 struct Size;
 class PuyoGroup;
 
+// 座標・移動量・盤面サイズは行と列で表す。行は下向き、列は右向きに増える。
 struct Vec2 {
     protected:
         int r;
@@ -187,6 +189,7 @@ class vector {
         }
 };
 
+// 行列を行優先で一次元配列に格納する。
 template<class T>
 class matrix : public vector<T> {
     protected:
@@ -258,6 +261,7 @@ puyocolor randColor() {
     return static_cast<puyocolor>(std::rand() % 4 + 1);
 }
 
+// 上下左右につながった同色のぷよを、盤面上の座標で保持する。
 class PuyoGroup{
     public:
         puyocolor color;
@@ -283,6 +287,7 @@ bool Position::isIn(const PuyoGroup& group) const{
        != group.cells.end();
 }
 
+// 着地して固定されたぷよを保持する盤面。
 class PuyoStuck : public matrix<puyocolor> {
     public:
         using base = matrix<puyocolor>;
@@ -301,7 +306,7 @@ class PuyoStuck : public matrix<puyocolor> {
             return result;
         }
 
-        // 1フレーム分だけ浮いているぷよを下へ移動する。
+        // 各列を下から調べ、浮いているぷよを1回の呼び出しにつき最大1マス落とす。
         bool breakDown() {
             bool moved = false;
             for (int c = 0; c < cols(); c++) {
@@ -316,6 +321,7 @@ class PuyoStuck : public matrix<puyocolor> {
             return moved;
         }
 
+        // 同色の隣接マスを再帰的にたどり、登録済みのマスは再訪しない。
         void addNeighborPuyoToGroup(PuyoGroup& group, const Position& pos){
             std::vector<PosOffset> neighbors = {
                 PosOffset(1, 0),
@@ -333,6 +339,8 @@ class PuyoStuck : public matrix<puyocolor> {
             }   
         }
 
+        // 消去前の盤面でグループを確定し、4個以上のグループをまとめて消す。
+        // 戻り値は消えたグループ数で、そのまま得点に加算する。
         int eracePuyo() {
             std::vector<PuyoGroup> groups = std::vector<PuyoGroup>();
             int eracedNum = 0;
@@ -388,6 +396,7 @@ class PuyoStuck : public matrix<puyocolor> {
 
 };
 
+// 落下中の2個組を3×3の行列で表し、中央のぷよを回転軸にする。
 class PuyoDrop : public matrix<puyocolor> {
     public:
         using base = matrix<puyocolor>;
@@ -446,6 +455,7 @@ class PuyoDrop : public matrix<puyocolor> {
             return candidate;
         }
 
+        // 軸からの相対位置を返す。軸の盤面座標に足すと各ぷよの盤面座標になる。
         std::map<PosOffset, puyocolor> allPuyo() const {
             std::map<PosOffset, puyocolor> result;
             for (const auto& cell : all()) {
@@ -484,6 +494,7 @@ class PuyoOperator {
             return result;
         }
 
+        // 色の付いたセルがすべて盤面内にあり、固定済みのぷよと重ならなければ置ける。
         bool canPlace(const PuyoDrop& drop, const Position& dropPos) const {
             return overlapped(drop, dropPos).empty() && outPuyo(drop, dropPos).empty();
         }
@@ -508,7 +519,8 @@ class PuyoOperator {
                 return;
             }
 
-            // その場での回転を妨げているぷよの、中心に対する左右位置を調べる。
+            // 回転後に盤面の外へ出る、または固定済みのぷよに重なるセルを調べる。
+            // 軸のどちら側が塞がっているかを壁蹴り候補の絞り込みに使う。
             bool failedOnRight = false;
             bool failedOnLeft = false;
 
@@ -527,7 +539,7 @@ class PuyoOperator {
                 if (local.getC() < 0) failedOnLeft = true;
             }
 
-            // drop 内の各セルの Position - center を壁蹴り候補にする。
+            // 3×3の行列の各座標を軸からの移動量に変換し、壁蹴り候補にする。
             std::vector<PosOffset> kicks;
             for (const auto& cell : drop.all()) {
                 const PosOffset kick = cell.first - drop.center();
@@ -581,6 +593,7 @@ class PuyoOperator {
             }
         }
 
+        // 描画用のコピーに落下中の組を重ねることで、固定済みの盤面を保つ。
         matrix<puyocolor> renderedMatrix(const PuyoDrop& drop, const Position& dropPos) const {
             matrix<puyocolor> result(stuck_);
             for (const auto& dropPuyo : drop.allPuyo()) {
@@ -636,6 +649,7 @@ class PuyoOperator {
 
                     if (!loop) break;
 
+                    // 6回の画面更新ごとに自動で1マス落とす。
                     if (++delay % waitCount == 0) {
                         moveDrop(drop, dropPos, PosOffset(1, 0));
                     }
@@ -646,6 +660,8 @@ class PuyoOperator {
 
                 if (!loop) break;
 
+                // 着地した組を固定し、盤面が安定するたびに消去を試す。
+                // 消去したら再び落下させ、連鎖が途切れるまで繰り返す。
                 merge(drop, dropPos);
                 while(true){
                     while (stuck_.breakDown()) {
@@ -677,6 +693,7 @@ void drawRectangle(int r1, int c1, int r2, int c2, int color) {
 void display(const matrix<puyocolor>& puyo, int score) {
     drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2, COLOR_PAIR(0));
 
+    // 盤面の1列を端末の2文字幅に割り当てて描画する。
     for (int r = 0; r < puyo.rows(); r++) {
         for (int c = 0; c < puyo.cols(); c++) {
             const short color = static_cast<short>(puyo(r, c));
@@ -714,6 +731,7 @@ void initScreen() {
     cbreak();
     curs_set(0);
     keypad(stdscr, TRUE);
+    // キー入力を待たず、入力がなくてもゲームを進める。
     timeout(0);
 }
 
