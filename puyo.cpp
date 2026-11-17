@@ -5,32 +5,15 @@
 #include <cstdlib>
 #include <ctime>
 #include <functional>
-#include <limits>
 #include <map>
 #include <stdexcept>
 #include <utility>
 #include <vector>
 #include <string>
 
-// 操作中の画面更新間隔（マイクロ秒）。
-#define GMCLOCK 50000
-
-enum puyocolor {
-    DEFAULT = 0,
-    RED,
-    BLUE,
-    GREEN,
-    YELLOW
-};
-
-
-const std::vector<std::vector<short>> colorSets = {
-    {static_cast<short>(DEFAULT), COLOR_WHITE, COLOR_BLACK},
-    {static_cast<short>(RED), COLOR_RED, COLOR_BLACK},
-    {static_cast<short>(BLUE), COLOR_BLUE, COLOR_BLACK},
-    {static_cast<short>(YELLOW), COLOR_YELLOW, COLOR_BLACK},
-    {static_cast<short>(GREEN), COLOR_GREEN, COLOR_BLACK}
-};
+// ==========================================
+// 2次元ベクトル(座標・移動量・サイズ)
+// ==========================================
 
 struct Size;
 class PuyoGroup;
@@ -48,6 +31,7 @@ struct Vec2 {
         int getC() const { return c; }
 };
 
+// 座標同士の差や、移動・回転でずらす量を表す。
 struct PosOffset : Vec2 {
     PosOffset(int r = 0, int c = 0) : Vec2(r, c) {}
 
@@ -77,6 +61,7 @@ struct PosOffset : Vec2 {
     }
 };
 
+// 盤面や行列の中の位置を表す。
 struct Position : Vec2 {
     Position(int r = 0, int c = 0) : Vec2(r, c) {}
 
@@ -108,6 +93,7 @@ struct Position : Vec2 {
     bool isIn(const PuyoGroup& group) const;
 };
 
+// 行数と列数を表す。
 struct Size : Vec2 {
     Size(int r = 0, int c = 0) : Vec2(r, c) {}
 
@@ -137,6 +123,11 @@ bool Position::isIn(const Size& size) const {
     return r >= 0 && r < size.getR() && c >= 0 && c < size.getC();
 }
 
+// ==========================================
+// 一次元配列・行列
+// ==========================================
+
+// 要素を一次元配列に保持し、添字でアクセスする。
 template<class T>
 class vector {
     protected:
@@ -259,6 +250,20 @@ class matrix : public vector<T> {
         }
     };
 
+// ==========================================
+// ぷよ集合・行列
+// ==========================================
+
+// DEFAULT は空きマスを表す。
+enum puyocolor {
+    DEFAULT = 0,
+    RED,
+    BLUE,
+    GREEN,
+    YELLOW
+};
+
+// 新しいぷよの色を赤・青・緑・黄から選ぶ。
 puyocolor randColor() {
     return static_cast<puyocolor>(std::rand() % 4 + 1);
 }
@@ -396,7 +401,7 @@ class PuyoStuck : public matrix<puyocolor> {
         }
 
 
-};
+    };
 
 // 落下中の2個組を3×3の行列で表し、中央のぷよを回転軸にする。
 class PuyoDrop : public matrix<puyocolor> {
@@ -406,7 +411,7 @@ class PuyoDrop : public matrix<puyocolor> {
     private:
         Position center_;
 
-    public:
+        public:
         PuyoDrop() : PuyoDrop(3) {
             (*this)(center_) = randColor();
             (*this)(center_ + PosOffset(0, 1)) = randColor();
@@ -468,11 +473,128 @@ class PuyoDrop : public matrix<puyocolor> {
         }
 };
 
-void drawRectangle(int r1, int c1, int r2, int c2, int color);
-void displayGame(const matrix<puyocolor>& puyo, int score);
-void initColorPairs();
-void initScreen();
+// ==========================================
+// 端末の初期化と画面描画
+// ==========================================
 
+// ぷよの色を ncurses の色ペア番号・文字色・背景色に対応づける。
+const std::vector<std::vector<short>> colorSets = {
+    {static_cast<short>(DEFAULT), COLOR_WHITE, COLOR_BLACK},
+    {static_cast<short>(RED), COLOR_RED, COLOR_BLACK},
+    {static_cast<short>(BLUE), COLOR_BLUE, COLOR_BLACK},
+    {static_cast<short>(YELLOW), COLOR_YELLOW, COLOR_BLACK},
+    {static_cast<short>(GREEN), COLOR_GREEN, COLOR_BLACK}
+};
+
+void initColorPairs() {
+    for (const std::vector<short>& colors : colorSets) {
+        init_pair(colors[0], colors[1], colors[2]);
+    }
+}
+
+void initScreen() {
+    initscr();
+    start_color();
+    initColorPairs();
+    noecho();
+    cbreak();
+    curs_set(0);
+    keypad(stdscr, TRUE);  // 矢印キーを KEY_LEFT などのキーコードとして受け取る。
+    // キー入力を待たず、入力がなくてもゲームを進める。
+    timeout(0);
+}
+
+// 指定した端末座標に枠線と四隅を描く。
+void drawRectangle(int r1, int c1, int r2, int c2, int color) {
+    attrset(color);
+    mvhline(r1, c1, 0, c2 - c1);
+    mvhline(r2, c1, 0, c2 - c1);
+    mvvline(r1, c1, 0, r2 - r1);
+    mvvline(r1, c2, 0, r2 - r1);
+    mvaddch(r1, c1, ACS_ULCORNER);
+    mvaddch(r2, c1, ACS_LLCORNER);
+    mvaddch(r1, c2, ACS_URCORNER);
+    mvaddch(r2, c2, ACS_LRCORNER);
+}
+
+// 各画面は erase() で描画バッファを空にし、描き終えてから refresh() で反映する。
+void displayStart(const Size& displaySize){
+    erase();
+
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
+    std::string title = "Puyo!";
+    std::string message = "Press space";
+
+    int centx = 2 * displaySize.center().getC() + 1;
+    int centy = displaySize.center().getR() + 1;
+
+    mvprintw(centy, centx - title.length() / 2, "%s", title.c_str());
+    mvprintw(centy+1 , centx - message.length() / 2, "%s", message.c_str());
+    refresh();
+}
+
+void displayGame(const matrix<puyocolor>& puyo, int score) {
+    erase();
+
+    drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2, COLOR_PAIR(0));
+
+    // 盤面の1列を端末の2文字幅に割り当てて描画する。
+    for (int r = 0; r < puyo.rows(); r++) {
+        for (int c = 0; c < puyo.cols(); c++) {
+            const short color = static_cast<short>(puyo(r, c));
+            attrset(COLOR_PAIR(color));
+            char symbol = '?';
+            switch (color) {
+                case DEFAULT: symbol = '.'; break;
+                case RED: symbol = 'R'; break;
+                case BLUE: symbol = 'B'; break;
+                case GREEN: symbol = 'G'; break;
+                case YELLOW: symbol = 'Y'; break;
+                default: break;
+            }
+            mvaddch(r + 2, c * 2 + 2, symbol);
+        }
+    }
+
+    char message[256];
+    snprintf(message, sizeof(message), "Score: %d", score);
+    mvaddstr(0, 1, message);
+    refresh();
+}
+
+void displayPause(const Size& displaySize){
+    erase();
+
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
+
+    std::string title = "Pausing!";
+
+    int centx = 2 * displaySize.center().getC() + 1;
+    int centy = displaySize.center().getR() + 1;
+
+    mvprintw(centy, centx - title.length() / 2, "%s", title.c_str());
+    refresh();
+}
+
+void displayResult(const Size& displaySize, int score){
+    erase();
+
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
+    std::string title = "GameFinish!";
+
+    int centx = 2 * displaySize.center().getC() + 1;
+    int centy = displaySize.center().getR() + 1;
+
+    mvprintw(centy, centx - title.length() / 2, "%s", title.c_str());
+    mvprintw(centy + 1, centx - title.length() / 2, "score:%d", score);
+    refresh();
+}
+
+// ==========================================
+// プレイの進行と状態管理
+// ==========================================
+
+// ぷよの出現・操作・着地後の処理を状態に応じて進める。
 class PuyoOperator {
     private:
 
@@ -682,6 +804,7 @@ class PuyoOperator {
             if(state_ != GamePlayState::Settle) return;
 
             if (timer_ % waitCount_ != 0) return;
+            // 落下が止まってから消去を判定する。消去が起きたら次の更新で連鎖を調べる。
             if(stuck_.breakDown()) return;
                 
             int eracedNum = stuck_.eracePuyo();
@@ -691,18 +814,12 @@ class PuyoOperator {
         }
 
         void display(){
-            switch(state_){
-                case GamePlayState::Spawn:
-                case GamePlayState::Control:
-                    displayGame(merged(), score_);
-                    break;
-                case GamePlayState::Settle:
-                    displayGame(stuck_, score_);
-                    break;
-
-                case GamePlayState::Over:
-                    break;
-            }
+            matrix<puyocolor> rendererd = (
+                (state_ == GamePlayState::Control)?
+                merged() :
+                stuck_
+            );
+            displayGame(rendererd, score_);
         }
 
     public:
@@ -736,9 +853,11 @@ class PuyoOperator {
         {}
 
         bool getIsOver() {return state_ == GamePlayState::Over;}
+        int getScore() {return score_;}
 
 };
 
+// 表示中の画面に応じてキー入力を処理し、画面を切り替える。
 class GameController{
 
     private:
@@ -779,6 +898,7 @@ class GameController{
                 // ポーズ
                 case 'q':
                 case 'Q':
+                    displayPause(DISPLAYSIZE);
                     phase_ = Phase::PAUSE;
                     break;
                 // プレイ操作
@@ -787,7 +907,10 @@ class GameController{
                     break;
             }
 
-            if(puyoOp_.getIsOver()) phase_ = Phase::RESULT;
+            if(puyoOp_.getIsOver()) {
+                displayResult(DISPLAYSIZE, puyoOp_.getScore());
+                phase_ = Phase::RESULT;
+            }
         }
 
         void UpdatePause(int ch){
@@ -801,7 +924,8 @@ class GameController{
                 //リザルトへ
                 case 'q':
                 case 'Q':
-                    phase_ = Phase::PAUSE;
+                    displayResult(DISPLAYSIZE, puyoOp_.getScore());
+                    phase_ = Phase::RESULT;
                     break;
                 // リスタート
                 case 'r':
@@ -826,6 +950,7 @@ class GameController{
                 case ' ':
                 case 'q':
                 case 'Q':
+                    displayStart(DISPLAYSIZE);
                     phase_ = Phase::TITLE;
                     break;
             }
@@ -836,7 +961,9 @@ class GameController{
             phase_(TITLE),
             puyoOp_(displaysize),
             DISPLAYSIZE(displaysize)
-        {}
+        {
+            displayStart(displaysize);
+        }
 
         void Update(int ch){
             switch (phase_){
@@ -865,113 +992,31 @@ class GameController{
         bool getIsEnd(){return phase_ == Phase::END;}
 };
 
-void drawRectangle(int r1, int c1, int r2, int c2, int color) {
-    attrset(color);
-    mvhline(r1, c1, 0, c2 - c1);
-    mvhline(r2, c1, 0, c2 - c1);
-    mvvline(r1, c1, 0, r2 - r1);
-    mvvline(r1, c2, 0, r2 - r1);
-    mvaddch(r1, c1, ACS_ULCORNER);
-    mvaddch(r2, c1, ACS_LLCORNER);
-    mvaddch(r1, c2, ACS_URCORNER);
-    mvaddch(r2, c2, ACS_LRCORNER);
-}
+// ==========================================
+// ゲームループとエントリーポイント
+// ==========================================
 
-void displayGame(const matrix<puyocolor>& puyo, int score) {
-    drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2, COLOR_PAIR(0));
+// 操作中の画面更新間隔（マイクロ秒）。
+#define GMCLOCK 50000
 
-    // 盤面の1列を端末の2文字幅に割り当てて描画する。
-    for (int r = 0; r < puyo.rows(); r++) {
-        for (int c = 0; c < puyo.cols(); c++) {
-            const short color = static_cast<short>(puyo(r, c));
-            attrset(COLOR_PAIR(color));
-            char symbol = '?';
-            switch (color) {
-                case DEFAULT: symbol = '.'; break;
-                case RED: symbol = 'R'; break;
-                case BLUE: symbol = 'B'; break;
-                case GREEN: symbol = 'G'; break;
-                case YELLOW: symbol = 'Y'; break;
-                default: break;
-            }
-            mvaddch(r + 2, c * 2 + 2, symbol);
-        }
-    }
-
-    char message[256];
-    snprintf(message, sizeof(message), "Score: %d", score);
-    mvaddstr(0, 1, message);
-    refresh();
-}
-
-void displayStart(const Size& displaySize){
-    std::string title = "Puyo!";
-    std::string message = "Press space to play";
-    
-    int x = displaySize.center().getC();
-    int y = displaySize.center().getR();
-
-    mvprintw(y + 2, x - title.length() +1, "%s", title.c_str());
-    mvprintw(y + 2, x - message.length() +3, "%s", message.c_str());
-    refresh();
-}
-
-void displayPause(const Size& displaySize){
-    std::string title = "Pausing!";
-    
-    int x = displaySize.center().getC();
-    int y = displaySize.center().getR();
-
-    mvprintw(y + 2, x - title.length() +2, "%s", title.c_str());
-    refresh();
-}
-
-void displayResult(const Size& displaySize, int score){
-    std::string title = "GameFinish!";
-    
-    int x = displaySize.center().getC();
-    int y = displaySize.center().getR();
-
-    mvprintw(y + 2, x - title.length() +1, "%s", title.c_str());
-    mvprintw(y + 2, x - title.length() +3, "score:%d", score);
-    refresh();
-}
-
-void initColorPairs() {
-    for (const std::vector<short>& colors : colorSets) {
-        init_pair(colors[0], colors[1], colors[2]);
-    }
-}
-
-void initScreen() {
-    initscr();
-    start_color();
-    initColorPairs();
-    noecho();
-    cbreak();
-    curs_set(0);
-    keypad(stdscr, TRUE);
-    // キー入力を待たず、入力がなくてもゲームを進める。
-    timeout(0);
-}
-
+// タイトル画面で終了が選ばれるまで、入力の取得とゲームの更新を繰り返す。
 void runGame(){
     Size displaySize(12,6);
     GameController gamecontroller(displaySize);
     int ch;
-    while(gamecontroller.getIsEnd()){
+    while(!gamecontroller.getIsEnd()){
         ch = getch();
         gamecontroller.Update(ch);
         usleep(GMCLOCK);
     }
 }
 
+// 乱数と端末を初期化し、ゲーム終了時に端末の設定を戻す。
 int main() {
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
     initScreen();
 
-    PuyoOperator game(Size(12, 6));
-
+    runGame();
 
     endwin();
     return 0;
