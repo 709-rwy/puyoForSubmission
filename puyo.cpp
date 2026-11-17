@@ -15,15 +15,16 @@
 #define GMCLOCK 50000
 
 enum puyocolor {
-    NONE = 0,
+    DEFAULT = 0,
     RED,
     BLUE,
     GREEN,
     YELLOW
 };
 
+
 const std::vector<std::vector<short>> colorSets = {
-    {static_cast<short>(NONE), COLOR_WHITE, COLOR_BLACK},
+    {static_cast<short>(DEFAULT), COLOR_WHITE, COLOR_BLACK},
     {static_cast<short>(RED), COLOR_RED, COLOR_BLACK},
     {static_cast<short>(BLUE), COLOR_BLUE, COLOR_BLACK},
     {static_cast<short>(YELLOW), COLOR_YELLOW, COLOR_BLACK},
@@ -301,7 +302,7 @@ class PuyoStuck : public matrix<puyocolor> {
         int count() const {
             int result = 0;
             for (int i = 0; i < size(); i++) {
-                if ((*this)(i) != NONE) result++;
+                if ((*this)(i) != DEFAULT) result++;
             }
             return result;
         }
@@ -311,9 +312,9 @@ class PuyoStuck : public matrix<puyocolor> {
             bool moved = false;
             for (int c = 0; c < cols(); c++) {
                 for (int r = rows() - 2; r >= 0; r--) {
-                    if ((*this)(r, c) != NONE && (*this)(r + 1, c) == NONE) {
+                    if ((*this)(r, c) != DEFAULT && (*this)(r + 1, c) == DEFAULT) {
                         (*this)(r + 1, c) = (*this)(r, c);
-                        (*this)(r, c) = NONE;
+                        (*this)(r, c) = DEFAULT;
                         moved = true;
                     }
                 }
@@ -346,7 +347,7 @@ class PuyoStuck : public matrix<puyocolor> {
             int eracedNum = 0;
 
             for(auto cell : all()){
-                if(cell.second == NONE) goto nextCell;
+                if(cell.second == DEFAULT) goto nextCell;
 
                 for(const auto& group : groups){
                     if(cell.first.isIn(group)) goto nextCell;
@@ -364,7 +365,7 @@ class PuyoStuck : public matrix<puyocolor> {
             for(const auto& group : groups){
                 if(group.puyoNum() >= 4){
                     for(const auto& pos : group.cells){
-                        (*this)(pos) = NONE;
+                        (*this)(pos) = DEFAULT;
                     }
                     eracedNum++;
                 }
@@ -376,7 +377,7 @@ class PuyoStuck : public matrix<puyocolor> {
             std::vector<int> result(cols(), rows());
             for (int c = 0; c < cols(); c++) {
                 for (int r = 0; r < rows(); r++) {
-                    if ((*this)(r, c) != NONE) {
+                    if ((*this)(r, c) != DEFAULT) {
                         result[c] = r;
                         break;
                     }
@@ -388,7 +389,7 @@ class PuyoStuck : public matrix<puyocolor> {
         std::map<Position, puyocolor> allPuyo() const {
             std::map<Position, puyocolor> result;
             for (const auto& cell : all()) {
-                if (cell.second != NONE) result.insert(cell);
+                if (cell.second != DEFAULT) result.insert(cell);
             }
             return result;
         }
@@ -422,12 +423,13 @@ class PuyoDrop : public matrix<puyocolor> {
             return *this;
         }
 
+
         const Position& center() const { return center_; }
 
         // 元のオブジェクトを書き換えず、右回転後の候補を返す。
         PuyoDrop rotatedRightCandidate() const {
             PuyoDrop candidate(rows());
-            for (int i = 0; i < candidate.size(); i++) candidate(i) = NONE;
+            for (int i = 0; i < candidate.size(); i++) candidate(i) = DEFAULT;
 
             for (const auto& cell : all()) {
                 const Position destination(
@@ -442,7 +444,7 @@ class PuyoDrop : public matrix<puyocolor> {
 
         PuyoDrop rotatedLeftCandidate() const {
             PuyoDrop candidate(rows());
-            for (int i = 0; i < candidate.size(); i++) candidate(i) = NONE;
+            for (int i = 0; i < candidate.size(); i++) candidate(i) = DEFAULT;
 
             for (const auto& cell : all()) {
                 const Position destination(
@@ -459,26 +461,42 @@ class PuyoDrop : public matrix<puyocolor> {
         std::map<PosOffset, puyocolor> allPuyo() const {
             std::map<PosOffset, puyocolor> result;
             for (const auto& cell : all()) {
-                if (cell.second != NONE) result.emplace(cell.first - center_, cell.second);
+                if (cell.second != DEFAULT) result.emplace(cell.first - center_, cell.second);
             }
             return result;
         }
 };
 
 void drawRectangle(int r1, int c1, int r2, int c2, int color);
-void display(const matrix<puyocolor>& puyo, int score);
+void displayGame(const matrix<puyocolor>& puyo, int score);
 void initColorPairs();
 void initScreen();
 
 class PuyoOperator {
     private:
+
+        enum GamePlayState {
+            Spawn,
+            Control,
+            Settle,
+            Over
+        };
+
         PuyoStuck stuck_;
+        PuyoDrop drop_;
+        Position dropPos_;
+
+        GamePlayState state_;
+
+        const int WAITCOUNT = 6;
+        int timer_;
+        int score_ = 0;
 
         std::vector<Position> overlapped(const PuyoDrop& drop, const Position& dropPos) const {
             std::vector<Position> result;
             for (const auto& dropPuyo : drop.allPuyo()) {
                 const Position position = dropPos + dropPuyo.first;
-                if (position.isIn(stuck_.sizeObj()) && stuck_(position) != NONE) {
+                if (position.isIn(stuck_.sizeObj()) && stuck_(position) != DEFAULT) {
                     result.push_back(position);
                 }
             }
@@ -499,23 +517,23 @@ class PuyoOperator {
             return overlapped(drop, dropPos).empty() && outPuyo(drop, dropPos).empty();
         }
 
-        bool moveDrop(const PuyoDrop& drop, Position& dropPos, const PosOffset& offset) const {
-            const Position candidate = dropPos + offset;
-            if (!canPlace(drop, candidate)) return false;
-            dropPos = candidate;
+        bool moveDrop(const PosOffset& offset) {
+            const Position candidate = dropPos_ + offset;
+            if (!canPlace(drop_, candidate)) return false;
+            dropPos_ = candidate;
             return true;
         }
 
-        bool isDropped(const PuyoDrop& drop, const Position& dropPos) const {
-            return !canPlace(drop, dropPos + PosOffset(1, 0));
+        bool isDropped() const {
+            return !canPlace(drop_, dropPos_ + PosOffset(1, 0));
         }
 
-        void rotateDrop(PuyoDrop& drop, Position& dropPos) const {
-            const PuyoDrop rotated = drop.rotatedRightCandidate();
+        void rotateDrop(){
+            const PuyoDrop rotated = drop_.rotatedRightCandidate();
 
             // まずその場で回転できるなら、そのまま回転する。
-            if (canPlace(rotated, dropPos)) {
-                drop = rotated;
+            if (canPlace(rotated, dropPos_)) {
+                drop_ = rotated;
                 return;
             }
 
@@ -525,13 +543,13 @@ class PuyoOperator {
             bool failedOnLeft = false;
 
             for (const auto& cell : rotated.all()) {
-                if (cell.second == NONE) continue;
+                if (cell.second == DEFAULT) continue;
 
                 const PosOffset local = cell.first - rotated.center();
-                const Position position = dropPos + local;
+                const Position position = dropPos_ + local;
                 const bool failed =
                     !position.isIn(stuck_.sizeObj()) ||
-                    stuck_(position) != NONE;
+                    stuck_(position) != DEFAULT;
 
                 if (!failed) continue;
 
@@ -541,8 +559,8 @@ class PuyoOperator {
 
             // 3×3の行列の各座標を軸からの移動量に変換し、壁蹴り候補にする。
             std::vector<PosOffset> kicks;
-            for (const auto& cell : drop.all()) {
-                const PosOffset kick = cell.first - drop.center();
+            for (const auto& cell : drop_.all()) {
+                const PosOffset kick = cell.first - drop_.center();
 
                 // 下方向への壁蹴りはしない。
                 if (kick.getR() > 0) continue;
@@ -574,11 +592,11 @@ class PuyoOperator {
             );
 
             for (const PosOffset& kick : kicks) {
-                const Position positionCandidate = dropPos + kick;
+                const Position positionCandidate = dropPos_ + kick;
 
                 if (canPlace(rotated, positionCandidate)) {
-                    drop = rotated;
-                    dropPos = positionCandidate;
+                    drop_ = rotated;
+                    dropPos_ = positionCandidate;
                     return;
                 }
             }
@@ -586,94 +604,168 @@ class PuyoOperator {
             // 移動できる候補がなければ回転をキャンセルする。
         }
 
-        void merge(const PuyoDrop& drop, const Position& dropPos) {
-            for (const auto& dropPuyo : drop.allPuyo()) {
-                const Position position = dropPos + dropPuyo.first;
-                if (position.isIn(stuck_.sizeObj())) stuck_(position) = dropPuyo.second;
-            }
+        void merge() {
+            stuck_ = merged();
         }
 
         // 描画用のコピーに落下中の組を重ねることで、固定済みの盤面を保つ。
-        matrix<puyocolor> renderedMatrix(const PuyoDrop& drop, const Position& dropPos) const {
-            matrix<puyocolor> result(stuck_);
-            for (const auto& dropPuyo : drop.allPuyo()) {
-                const Position position = dropPos + dropPuyo.first;
+        PuyoStuck merged() const {
+            PuyoStuck result(stuck_);
+            for (const auto& dropPuyo : drop_.allPuyo()) {
+                const Position position = dropPos_ + dropPuyo.first;
                 if (position.isIn(stuck_.sizeObj())) result(position) = dropPuyo.second;
             }
             return result;
         }
 
+        void spawnDrop(){
+            if(state_ != GamePlayState::Spawn) return;
+
+            PuyoDrop drop;
+            Position dropPos(0, (stuck_.cols() - 1) / 2);
+
+            if (canPlace(drop, dropPos)){
+                drop_ = drop;
+                dropPos_ = dropPos;
+
+                state_ = GamePlayState::Control;
+            }else{
+                state_ = GamePlayState::Over;
+            }
+        }
+
+        void updateDrop(int ch){
+            if(state_ != GamePlayState::Control) return;
+
+            switch (ch) {
+                case KEY_LEFT:
+                case 'a':
+                case 'A':
+                    moveDrop(PosOffset(0, -1));
+                    break;
+
+                case KEY_RIGHT:
+                case 'd':
+                case 'D':
+                    moveDrop(PosOffset(0, 1));
+                    break;
+
+                case KEY_UP:
+                case 'w':
+                case 'W':
+                    rotateDrop();
+                    break;
+
+                case KEY_DOWN:
+                case 's':
+                case 'S':
+                    moveDrop(PosOffset(1, 0));
+                    break;
+
+                default:
+                    break;
+            }
+
+            // 6回の画面更新ごとに自動で1マス落とす。
+            if (timer_ % WAITCOUNT == 0) {
+                moveDrop(PosOffset(1, 0));
+            }
+
+            if(isDropped()){
+                merge();
+                state_ = GamePlayState::Settle;
+            } 
+        }
+
+        void updateSettle(){
+            if(state_ != GamePlayState::Settle) return;
+
+            if (timer_ % WAITCOUNT != 0) return;
+            if(stuck_.breakDown()) return;
+                
+            int eracedNum = stuck_.eracePuyo();
+            score_ += eracedNum;
+            
+            if(eracedNum == 0) state_ = GamePlayState::Spawn;
+        }
+
     public:
-        explicit PuyoOperator(const Size& boardSize = Size(12, 6)) : stuck_(boardSize) {}
 
-        void gameOperate() {
-            bool loop = true;
-            int delay = 0;
-            const int waitCount = 6;
-            int score = 0;
+        void Update(int ch){
+            switch(state_){
+                case GamePlayState::Spawn:
+                    spawnDrop();
+                    break;
+                case GamePlayState::Control:
+                    updateDrop(ch);
+                    break;
+                case GamePlayState::Settle:
+                    updateSettle();
+                    break;
+                case GamePlayState::Over:
+                    break;
+            }
+            timer_++;
+        }
 
-            while (loop) {
-                PuyoDrop drop;
-                Position dropPos(0, (stuck_.cols() - 1) / 2);
+        explicit PuyoOperator(const Size& boardSize = Size(12, 6), int waitCount = 6) :
+            stuck_(boardSize),
+            drop_(),
+            dropPos_(0, (stuck_.cols() - 1) / 2),
+            state_(GamePlayState::Spawn),
+            timer_(0),
+            score_(0),
+            WAITCOUNT(waitCount)
+        {}
 
-                // 生成位置がすでに塞がれていればゲームオーバー扱い。
-                if (!canPlace(drop, dropPos)) break;
+        bool getIsOver() {return state_ == GamePlayState::Over;}
 
-                while (!isDropped(drop, dropPos)) {
-                    const int ch = getch();
-                    switch (ch) {
-                        case KEY_LEFT:
-                            moveDrop(drop, dropPos, PosOffset(0, -1));
-                            break;
+};
 
-                        case KEY_RIGHT:
-                            moveDrop(drop, dropPos, PosOffset(0, 1));
-                            break;
+class GameController{
 
-                        case KEY_UP:
-                            rotateDrop(drop, dropPos);
-                            break;
+    private:
+        const Size DISPLAYSIZE;
 
-                        case KEY_DOWN:
-                            moveDrop(drop, dropPos, PosOffset(1, 0));
-                            break;
+        enum Phase {
+            START,
+            PLAYING,
+            PAUSE,
+            GAMEOVER
+        };
 
-                        case 'q':
-                        case 'Q':
-                            loop = false;
-                            break;
+        Phase phase_;
+        PuyoOperator puyoOp_;
 
-                        default:
-                            break;
-                    }
 
-                    if (!loop) break;
+        void tryPlay(int ch){
+            if(ch == ' ' && (phase_ == Phase::START || phase_ == Phase::PAUSE)) phase_ = Phase::PLAYING;
+        }
 
-                    // 6回の画面更新ごとに自動で1マス落とす。
-                    if (++delay % waitCount == 0) {
-                        moveDrop(drop, dropPos, PosOffset(1, 0));
-                    }
+        void tryPause(int ch){
+            if((ch == 'q' || ch == 'Q') && phase_ == Phase::PLAYING) phase_ = Phase::PAUSE;
+        }
 
-                    display(renderedMatrix(drop, dropPos), score);
-                    usleep(GMCLOCK);
-                }
 
-                if (!loop) break;
+    public:
+        explicit GameController(const Size& displaysize):
+            phase_(START),
+            puyoOp_(displaysize),
+            DISPLAYSIZE(displaysize)
+        {}
 
-                // 着地した組を固定し、盤面が安定するたびに消去を試す。
-                // 消去したら再び落下させ、連鎖が途切れるまで繰り返す。
-                merge(drop, dropPos);
-                while(true){
-                    while (stuck_.breakDown()) {
-                        display(stuck_, score);
-                        usleep(GMCLOCK * waitCount);
-                    }
-                    int eracedNum = stuck_.eracePuyo();
-                    if(eracedNum == 0) break; 
-                    score += eracedNum;
-                }
+        void Update(int ch){
+            switch (phase_){
+                case Phase::START:
+                    tryPlay(ch);
+                    break;
+                case Phase::PLAYING:
+                    tryPause(ch);
+                    puyoOp_.Update(ch);
+                    break;
 
-                display(stuck_, score);
+                default:
+                    break;
             }
         }
 };
@@ -690,7 +782,7 @@ void drawRectangle(int r1, int c1, int r2, int c2, int color) {
     mvaddch(r2, c2, ACS_LRCORNER);
 }
 
-void display(const matrix<puyocolor>& puyo, int score) {
+void displayGame(const matrix<puyocolor>& puyo, int score) {
     drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2, COLOR_PAIR(0));
 
     // 盤面の1列を端末の2文字幅に割り当てて描画する。
@@ -700,7 +792,7 @@ void display(const matrix<puyocolor>& puyo, int score) {
             attrset(COLOR_PAIR(color));
             char symbol = '?';
             switch (color) {
-                case NONE: symbol = '.'; break;
+                case DEFAULT: symbol = '.'; break;
                 case RED: symbol = 'R'; break;
                 case BLUE: symbol = 'B'; break;
                 case GREEN: symbol = 'G'; break;
@@ -735,12 +827,35 @@ void initScreen() {
     timeout(0);
 }
 
+int waitInput() {
+    while (true){
+        int input = getch();
+        if (input != ERR) return input;
+    }
+}
+
+void displayStart(const Size& displaySize){
+    refresh();
+}
+
+void displayPause(const Size& displaySize){
+    refresh();
+}
+
+void displayResult(const Size& displaySize){
+    refresh();
+}
+
+void runGame(){
+
+}
+
 int main() {
     std::srand(static_cast<unsigned int>(std::time(nullptr)));
     initScreen();
 
     PuyoOperator game(Size(12, 6));
-    game.gameOperate();
+
 
     endwin();
     return 0;
