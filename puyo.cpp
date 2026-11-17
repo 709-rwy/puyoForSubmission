@@ -10,6 +10,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
+#include <string>
 
 // 操作中の画面更新間隔（マイクロ秒）。
 #define GMCLOCK 50000
@@ -488,7 +489,7 @@ class PuyoOperator {
 
         GamePlayState state_;
 
-        const int WAITCOUNT = 6;
+        int waitCount_ = 6;
         int timer_;
         int score_ = 0;
 
@@ -667,7 +668,7 @@ class PuyoOperator {
             }
 
             // 6回の画面更新ごとに自動で1マス落とす。
-            if (timer_ % WAITCOUNT == 0) {
+            if (timer_ % waitCount_ == 0) {
                 moveDrop(PosOffset(1, 0));
             }
 
@@ -680,13 +681,28 @@ class PuyoOperator {
         void updateSettle(){
             if(state_ != GamePlayState::Settle) return;
 
-            if (timer_ % WAITCOUNT != 0) return;
+            if (timer_ % waitCount_ != 0) return;
             if(stuck_.breakDown()) return;
                 
             int eracedNum = stuck_.eracePuyo();
             score_ += eracedNum;
             
             if(eracedNum == 0) state_ = GamePlayState::Spawn;
+        }
+
+        void display(){
+            switch(state_){
+                case GamePlayState::Spawn:
+                case GamePlayState::Control:
+                    displayGame(merged(), score_);
+                    break;
+                case GamePlayState::Settle:
+                    displayGame(stuck_, score_);
+                    break;
+
+                case GamePlayState::Over:
+                    break;
+            }
         }
 
     public:
@@ -705,6 +721,7 @@ class PuyoOperator {
                 case GamePlayState::Over:
                     break;
             }
+            display();
             timer_++;
         }
 
@@ -715,7 +732,7 @@ class PuyoOperator {
             state_(GamePlayState::Spawn),
             timer_(0),
             score_(0),
-            WAITCOUNT(waitCount)
+            waitCount_(waitCount)
         {}
 
         bool getIsOver() {return state_ == GamePlayState::Over;}
@@ -728,46 +745,124 @@ class GameController{
         const Size DISPLAYSIZE;
 
         enum Phase {
-            START,
+            TITLE,
             PLAYING,
             PAUSE,
-            GAMEOVER
+            RESULT,
+            END
         };
 
         Phase phase_;
         PuyoOperator puyoOp_;
 
+        void UpdateTitle(int ch){
+            if(phase_ != Phase::TITLE) return;
 
-        void tryPlay(int ch){
-            if(ch == ' ' && (phase_ == Phase::START || phase_ == Phase::PAUSE)) phase_ = Phase::PLAYING;
+            switch(ch){
+                // プレイスタート
+                case ' ':
+                    puyoOp_ = PuyoOperator(DISPLAYSIZE);
+                    phase_ = Phase::PLAYING;
+                    break;
+                // プログラム実行終了
+                case 'q':
+                case 'Q':
+                    phase_ = Phase::END;
+                    break;
+            }
         }
 
-        void tryPause(int ch){
-            if((ch == 'q' || ch == 'Q') && phase_ == Phase::PLAYING) phase_ = Phase::PAUSE;
+        void UpdatePlaying(int ch){
+            if(phase_ != Phase::PLAYING) return;
+
+            switch(ch){
+                // ポーズ
+                case 'q':
+                case 'Q':
+                    phase_ = Phase::PAUSE;
+                    break;
+                // プレイ操作
+                default:
+                    puyoOp_.Update(ch);
+                    break;
+            }
+
+            if(puyoOp_.getIsOver()) phase_ = Phase::RESULT;
         }
 
+        void UpdatePause(int ch){
+            if(phase_ != Phase::PAUSE) return;
+
+            switch(ch){
+                // プレイ再開
+                case ' ':
+                    phase_ = Phase::PLAYING;
+                    break;
+                //リザルトへ
+                case 'q':
+                case 'Q':
+                    phase_ = Phase::PAUSE;
+                    break;
+                // リスタート
+                case 'r':
+                case 'R':
+                    puyoOp_ = PuyoOperator(DISPLAYSIZE);
+                    phase_ = Phase::PLAYING;
+                    break;
+            }
+        }
+
+        void UpdateResult(int ch){
+            if(phase_ != Phase::RESULT) return;
+
+            switch(ch){
+                // リスタート
+                case 'r':
+                case 'R':
+                    puyoOp_ = PuyoOperator(DISPLAYSIZE);
+                    phase_ = Phase::PLAYING;
+                    break;
+                //タイトル画面へ
+                case ' ':
+                case 'q':
+                case 'Q':
+                    phase_ = Phase::TITLE;
+                    break;
+            }
+        }
 
     public:
         explicit GameController(const Size& displaysize):
-            phase_(START),
+            phase_(TITLE),
             puyoOp_(displaysize),
             DISPLAYSIZE(displaysize)
         {}
 
         void Update(int ch){
             switch (phase_){
-                case Phase::START:
-                    tryPlay(ch);
+                case Phase::TITLE:
+                    UpdateTitle(ch);
                     break;
+
                 case Phase::PLAYING:
-                    tryPause(ch);
-                    puyoOp_.Update(ch);
+                    UpdatePlaying(ch);
+                    break;
+
+                case Phase::PAUSE:
+                    UpdatePause(ch);
+                    break;
+
+                case Phase::RESULT:
+                    UpdateResult(ch);
                     break;
 
                 default:
                     break;
             }
+            
         }
+
+        bool getIsEnd(){return phase_ == Phase::END;}
 };
 
 void drawRectangle(int r1, int c1, int r2, int c2, int color) {
@@ -809,6 +904,39 @@ void displayGame(const matrix<puyocolor>& puyo, int score) {
     refresh();
 }
 
+void displayStart(const Size& displaySize){
+    std::string title = "Puyo!";
+    std::string message = "Press space to play";
+    
+    int x = displaySize.center().getC();
+    int y = displaySize.center().getR();
+
+    mvprintw(y + 2, x - title.length() +1, "%s", title.c_str());
+    mvprintw(y + 2, x - message.length() +3, "%s", message.c_str());
+    refresh();
+}
+
+void displayPause(const Size& displaySize){
+    std::string title = "Pausing!";
+    
+    int x = displaySize.center().getC();
+    int y = displaySize.center().getR();
+
+    mvprintw(y + 2, x - title.length() +2, "%s", title.c_str());
+    refresh();
+}
+
+void displayResult(const Size& displaySize, int score){
+    std::string title = "GameFinish!";
+    
+    int x = displaySize.center().getC();
+    int y = displaySize.center().getR();
+
+    mvprintw(y + 2, x - title.length() +1, "%s", title.c_str());
+    mvprintw(y + 2, x - title.length() +3, "score:%d", score);
+    refresh();
+}
+
 void initColorPairs() {
     for (const std::vector<short>& colors : colorSets) {
         init_pair(colors[0], colors[1], colors[2]);
@@ -827,27 +955,15 @@ void initScreen() {
     timeout(0);
 }
 
-int waitInput() {
-    while (true){
-        int input = getch();
-        if (input != ERR) return input;
-    }
-}
-
-void displayStart(const Size& displaySize){
-    refresh();
-}
-
-void displayPause(const Size& displaySize){
-    refresh();
-}
-
-void displayResult(const Size& displaySize){
-    refresh();
-}
-
 void runGame(){
-
+    Size displaySize(12,6);
+    GameController gamecontroller(displaySize);
+    int ch;
+    while(gamecontroller.getIsEnd()){
+        ch = getch();
+        gamecontroller.Update(ch);
+        usleep(GMCLOCK);
+    }
 }
 
 int main() {
