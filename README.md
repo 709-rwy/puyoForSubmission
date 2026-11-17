@@ -58,3 +58,13 @@ bash build.sh
 | 端末の初期化と画面描画 | `initScreen`、`drawRectangle`、`displayStart` など | ncurses を初期化し、タイトル・プレイ・ポーズ・結果の各画面を描く |
 | プレイの進行と画面遷移 | `PuyoOperator`、`GameController` | ぷよの操作や連鎖、得点を処理し、入力やゲームの状態に応じて画面を切り替える |
 | ゲームループとエントリーポイント | `runGame`、`main` | 入力を受け取りながらゲームを更新し、終了時に端末の設定を戻す |
+
+## 大学課題からの発展
+
+大学のC++演習では、配布された雛形に着地・回転・連鎖・得点などを実装する課題に取り組みました。講義資料では、行列を継承した同じ `PuyoArray` 型で、落下中のぷよと着地済みのぷよを管理する構成が示されていました。応募版では行列をデータの土台として使いながら、**固定盤面、操作中のぷよ、対局の進行、画面遷移を、それぞれ専用のクラスに分けました。**
+
+- **`PuyoStuck` と `PuyoDrop` — 固定盤面と操作中の2個組。** `PuyoStuck` は固定済みのぷよを保持し、同色グループの探索・消去や、浮いたぷよの落下を担当します。`PuyoDrop` は操作中の2個組を回転軸付きの3×3行列として保持し、回転後の候補を作ります。この候補を盤面に置けるか確認し、その場で回れない場合に位置をずらして再判定する壁蹴りを追加しました。[盤面と2個組の実装](https://github.com/709-rwy/puyoForSubmission/blob/eb939d98ee8204ee0b4903facaf546885daf8708/puyo.cpp#L297) · [壁蹴り](https://github.com/709-rwy/puyoForSubmission/blob/eb939d98ee8204ee0b4903facaf546885daf8708/puyo.cpp#L654)
+- **`PuyoOperator` と `GameController` — 対局の進行と画面遷移。** `PuyoOperator` は、ぷよの出現から移動・着地・連鎖・得点まで、1回の対局を進めます。`GameController` は、タイトル・対局・ポーズ・結果の切り替えと、画面ごとの入力を担当します。ポーズ中は対局の更新を止め、再開時には同じ対局を続け、再戦時には新しい対局を作る構成にしました。[対局の進行](https://github.com/709-rwy/puyoForSubmission/blob/eb939d98ee8204ee0b4903facaf546885daf8708/puyo.cpp#L597) · [画面遷移](https://github.com/709-rwy/puyoForSubmission/blob/eb939d98ee8204ee0b4903facaf546885daf8708/puyo.cpp#L860)
+- **`Vec2`・`Position`・`PosOffset`・`Size` — 座標計算の意図が読める型。** 行・列の2成分を共通の `Vec2` に持たせ、位置・移動量・盤面サイズを専用の型で表しました。移動先を `位置 + 移動量`、2点間のずれを `位置 − 位置` と書けるようにし、移動や壁蹴りの計算を追いやすくしました。[座標型の実装](https://github.com/709-rwy/puyoForSubmission/blob/eb939d98ee8204ee0b4903facaf546885daf8708/puyo.cpp#L21)
+
+画面遷移の追加とゲームループの再設計は、[初回公開版から応募版への差分](https://github.com/709-rwy/puyoForSubmission/compare/5bb747747bc8d4be37d127af6c4fabf6209ab602...eb939d98ee8204ee0b4903facaf546885daf8708)で確認できます。
