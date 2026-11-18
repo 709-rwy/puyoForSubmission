@@ -505,8 +505,7 @@ void initScreen() {
 }
 
 // 指定した端末座標に枠線と四隅を描く。
-void drawRectangle(int r1, int c1, int r2, int c2, int color) {
-    attrset(color);
+void drawRectangle(int r1, int c1, int r2, int c2) {
     mvhline(r1, c1, 0, c2 - c1);
     mvhline(r2, c1, 0, c2 - c1);
     mvvline(r1, c1, 0, r2 - r1);
@@ -520,8 +519,8 @@ void drawRectangle(int r1, int c1, int r2, int c2, int color) {
 // 各画面は erase() で描画バッファを空にし、描き終えてから refresh() で反映する。
 void displayStart(const Size& displaySize){
     erase();
-
-    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
+    attrset(0);
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2);
     std::string title = "Puyo!";
     std::string message = "Press space";
 
@@ -533,10 +532,10 @@ void displayStart(const Size& displaySize){
     refresh();
 }
 
-void displayGame(const matrix<puyocolor>& puyo, int score) {
+void displayGame(const matrix<puyocolor>& puyo, int score, int maxCombo) {
     erase();
-
-    drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2, COLOR_PAIR(0));
+    attrset(0);
+    drawRectangle(1, 0, puyo.rows() + 2, puyo.cols() * 2 + 2);
 
     // 盤面の1列を端末の2文字幅に割り当てて描画する。
     for (int r = 0; r < puyo.rows(); r++) {
@@ -557,36 +556,39 @@ void displayGame(const matrix<puyocolor>& puyo, int score) {
     }
 
     char message[256];
-    snprintf(message, sizeof(message), "Score: %d", score);
+    attrset(0);
+    snprintf(message, sizeof(message), "Score: %d, MaxCombo: %d", score, maxCombo);
     mvaddstr(0, 1, message);
     refresh();
 }
 
-void displayPause(const Size& displaySize){
+void displayPause(const Size& displaySize, std::pair<int,int> results){
     erase();
-
-    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
-
+    attrset(0);
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2);
     std::string title = "Pausing!";
 
     int centx = 2 * displaySize.center().getC() + 1;
     int centy = displaySize.center().getR() + 1;
 
-    mvprintw(centy, centx - title.length() / 2, "%s", title.c_str());
+    mvprintw(centy - 1, centx - title.length() / 2, "%s", title.c_str());
+    mvprintw(centy + 1, 1, "score:%d", results.first);
+    mvprintw(centy + 2, 1, "maxCombo:%d", results.second);
     refresh();
 }
 
-void displayResult(const Size& displaySize, int score){
+void displayResult(const Size& displaySize, std::pair<int,int> results){
     erase();
-
-    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2, COLOR_PAIR(0));
+    attrset(0);
+    drawRectangle(1, 0, displaySize.getR() + 2, displaySize.getC() * 2 + 2);
     std::string title = "GameFinish!";
 
     int centx = 2 * displaySize.center().getC() + 1;
     int centy = displaySize.center().getR() + 1;
 
-    mvprintw(centy, centx - title.length() / 2, "%s", title.c_str());
-    mvprintw(centy + 1, centx - title.length() / 2, "score:%d", score);
+    mvprintw(centy - 1, centx - title.length() / 2, "%s", title.c_str());
+    mvprintw(centy + 1, centx - title.length() / 2, "score:%d", results.first);
+    mvprintw(centy + 2, centx - title.length() / 2, "maxCombo:%d", results.second);
     refresh();
 }
 
@@ -612,8 +614,13 @@ class PuyoOperator {
         GamePlayState state_;
 
         int waitCount_ = 6;
-        int timer_;
+        int timer_ = 0;
+        int combo_ = 0;
+
         int score_ = 0;
+        //コンボの上限という意味ではなくプレイ中に出た最大コンボ数
+        int maxCombo_ = 0;
+
 
         std::vector<Position> overlapped(const PuyoDrop& drop, const Position& dropPos) const {
             std::vector<Position> result;
@@ -755,6 +762,8 @@ class PuyoOperator {
             }else{
                 state_ = GamePlayState::Over;
             }
+
+            combo_ = 0;
         }
 
         void updateDrop(int ch){
@@ -808,9 +817,15 @@ class PuyoOperator {
             if(stuck_.breakDown()) return;
                 
             int eracedNum = stuck_.eracePuyo();
-            score_ += eracedNum;
             
-            if(eracedNum == 0) state_ = GamePlayState::Spawn;
+            if(eracedNum == 0) {
+                state_ = GamePlayState::Spawn;
+                return;
+            }
+
+            combo_++;
+            score_ += eracedNum * combo_;
+            maxCombo_ = std::max(maxCombo_, combo_);
         }
 
         void display(){
@@ -819,7 +834,7 @@ class PuyoOperator {
                 merged() :
                 stuck_
             );
-            displayGame(rendererd, score_);
+            displayGame(rendererd, score_, maxCombo_);
         }
 
     public:
@@ -849,12 +864,16 @@ class PuyoOperator {
             state_(GamePlayState::Spawn),
             timer_(0),
             score_(0),
+            combo_(0),
+            maxCombo_(0),
             waitCount_(waitCount)
         {}
 
         bool getIsOver() {return state_ == GamePlayState::Over;}
         int getScore() {return score_;}
+        int getMaxCombo() {return maxCombo_;}
 
+        std::pair<int,int> getResults() {return std::make_pair(score_, maxCombo_);}
 };
 
 // 表示中の画面に応じてキー入力を処理し、画面を切り替える。
@@ -898,7 +917,7 @@ class GameController{
                 // ポーズ
                 case 'q':
                 case 'Q':
-                    displayPause(DISPLAYSIZE);
+                    displayPause(DISPLAYSIZE, puyoOp_.getResults());
                     phase_ = Phase::PAUSE;
                     break;
                 // プレイ操作
@@ -908,7 +927,7 @@ class GameController{
             }
 
             if(puyoOp_.getIsOver()) {
-                displayResult(DISPLAYSIZE, puyoOp_.getScore());
+                displayResult(DISPLAYSIZE, puyoOp_.getResults());
                 phase_ = Phase::RESULT;
             }
         }
@@ -924,7 +943,7 @@ class GameController{
                 //リザルトへ
                 case 'q':
                 case 'Q':
-                    displayResult(DISPLAYSIZE, puyoOp_.getScore());
+                    displayResult(DISPLAYSIZE, puyoOp_.getResults());
                     phase_ = Phase::RESULT;
                     break;
                 // リスタート
